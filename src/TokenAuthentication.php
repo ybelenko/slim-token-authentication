@@ -29,7 +29,8 @@ class TokenAuthentication
         'regex' => '/Bearer\s+(.*)$/i',
         'parameter' => 'authorization',
         'cookie' => 'authorization',
-        'argument' => 'authorization'
+        'argument' => 'authorization',
+        'requiredScope' => null
     ];
 
     private $response = [];
@@ -307,5 +308,15 @@ class TokenAuthentication
     public function getCookie()
     {
         return $this->options['cookie'];
+    }
+
+    public function setRequiredScope($requiredScope)
+    {
+        $this->options['requiredScope'] = $requiredScope;
+    }
+
+    public function getRequiredScope()
+    {
+        return $this->options['requiredScope'];
     }
 }
