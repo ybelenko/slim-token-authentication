@@ -90,6 +90,11 @@ class TokenAuthentication
         $uri = $request->getUri()->getPath();
         $uri = '/' . trim($uri, '/');
 
+        /** If middleware applied directly to route or to group of routes we should authenticate */
+        if (false === empty($request->getAttribute('route')) && null === $this->options["passthrough"] && null === $this->options["path"]) {
+            return true;
+        }
+
         /** If request path is matches passthrough should not authenticate. */
         foreach ((array)$this->options["passthrough"] as $passthrough) {
             $passthrough = rtrim($passthrough, "/");
@@ -113,7 +118,7 @@ class TokenAuthentication
     {
         /** If exists a custom error function callable, ignore remaining code */
         if (!empty($this->options['error'])) {
-            
+
             $custom_error_response = $this->options['error']($request, $response, $this);
 
             if ($custom_error_response instanceof Response) {
