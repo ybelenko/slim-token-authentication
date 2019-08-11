@@ -10,9 +10,7 @@ declare(strict_types=1);
 namespace Dyorg\TokenAuthentication;
 
 use PHPUnit\Framework\TestCase;
-use Slim\Http\Environment;
-use Slim\Http\Request;
-use Slim\Http\Uri;
+use Slim\Factory\ServerRequestCreatorFactory;
 
 class TokenSearchTest extends TestCase
 {
@@ -20,7 +18,7 @@ class TokenSearchTest extends TestCase
 
     public function test_should_found_token_from_header()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
 
         $tokenSearch = new TokenSearch([
@@ -35,7 +33,7 @@ class TokenSearchTest extends TestCase
 
     public function test_should_found_token_from_cookie()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withCookieParams([
                 'authorization' => self::$token
             ]);
@@ -51,8 +49,12 @@ class TokenSearchTest extends TestCase
 
     public function test_should_found_token_from_parameter()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api?authorization=' . self::$token));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
+            ->withQueryParams([
+                'authorization' => self::$token
+            ]);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $tokenSearch = new TokenSearch([
             'parameter' => 'authorization'
@@ -68,14 +70,14 @@ class TokenSearchTest extends TestCase
      */
     public function test_exception_when_token_not_found()
     {
-        $request = Request::createFromEnvironment(Environment::mock());
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
 
         (new TokenSearch([]))->getToken($request);
     }
 
     public function test_should_return_token_in_attribute()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
 
         $tokenSearch = new TokenSearch([

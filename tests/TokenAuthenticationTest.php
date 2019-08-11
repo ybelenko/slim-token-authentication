@@ -12,15 +12,17 @@ namespace Dyorg;
 use Dyorg\TokenAuthentication\Exceptions\UnauthorizedException;
 use Dyorg\TokenAuthentication\Exceptions\UnauthorizedExceptionInterface;
 use Dyorg\TokenAuthentication\TokenSearch;
+use Dyorg\Handlers\ResponseInitHandler;
+use Dyorg\Handlers\ResponseTokenHandler;
+use Dyorg\Handlers\ResponseUsernameHandler;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Slim\Http\Environment;
-use Slim\Http\Request;
-use Slim\Http\Response;
-use Slim\Http\Uri;
-use Slim\Route;
-use Slim\RouteGroup;
+use Slim\CallableResolver;
+use Slim\Routing\RouteCollector;
+use Slim\Routing\RouteResolver;
+use Slim\Factory\AppFactory;
+use Slim\Factory\ServerRequestCreatorFactory;
 
 class TokenAuthenticationTest extends TestCase
 {
@@ -115,22 +117,17 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_authenticate_when_matches_path()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -138,24 +135,33 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_authenticate_when_middleware_applied_to_route_without_path_option()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
+        $handler = new ResponseTokenHandler();
+        $responseFactory = AppFactory::determineResponseFactory();
+        $callableResolver = new CallableResolver();
+        $routeCollector = new RouteCollector($responseFactory, $callableResolver);
+        $routeResolver = new RouteResolver($routeCollector);
 
-        $route = new Route('GET', '/api', $next);
-        $request = $request->withAttribute('route', $route);
+        $route = $routeCollector->map(['GET'], '/api', [$handler, 'handle']);
+        $routingResults = $routeResolver->computeRoutingResults(
+            $request->getUri()->getPath(),
+            $request->getMethod()
+        );
 
-        $response = $auth($request, new Response(), $next);
+        $request = $request
+            ->withAttribute('routingResults', $routingResults)
+            ->withAttribute('routeParser', $routeCollector->getRouteParser())
+            ->withAttribute('route', $route);
+
+        $response = $auth->process($request, $handler);
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -163,22 +169,17 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_found_token_from_default_header()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -186,20 +187,17 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_and_found_token()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token_invalid);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertEquals(self::$token_invalid, json_decode((string) $response->getBody())->token);
@@ -207,22 +205,33 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_and_found_token_when_applied_to_route_without_path_option()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token_invalid);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
+        $handler = new ResponseInitHandler();
+        $responseFactory = AppFactory::determineResponseFactory();
+        $callableResolver = new CallableResolver();
+        $routeCollector = new RouteCollector($responseFactory, $callableResolver);
+        $routeResolver = new RouteResolver($routeCollector);
 
-        $route = new Route('GET', '/api', $next);
-        $request = $request->withAttribute('route', $route);
+        $route = $routeCollector->map(['GET'], '/api', [$handler, 'handle']);
+        $routingResults = $routeResolver->computeRoutingResults(
+            $request->getUri()->getPath(),
+            $request->getMethod()
+        );
 
-        $response = $auth($request, new Response(), $next);
+        $request = $request
+            ->withAttribute('routingResults', $routingResults)
+            ->withAttribute('routeParser', $routeCollector->getRouteParser())
+            ->withAttribute('route', $route);
+
+        $response = $auth->process($request, $handler);
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertEquals(self::$token_invalid, json_decode((string) $response->getBody())->token);
@@ -230,19 +239,16 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_and_not_found_token()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertEquals(null, json_decode((string) $response->getBody())->token);
@@ -250,29 +256,27 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_when_authorizator_return_false()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token_invalid);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'authenticatorWithReturnFalseWhenUnauthorized'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
     }
 
     public function test_should_found_token_from_custom_header()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('X-Token', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -280,13 +284,7 @@ class TokenAuthenticationTest extends TestCase
             'header' => 'X-Token'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -294,9 +292,10 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_found_token_from_custom_header_with_custom_regex()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('X-Token', 'Custom ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -305,13 +304,7 @@ class TokenAuthenticationTest extends TestCase
             'regex' => '/^Custom\s(.*)$/'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -319,9 +312,10 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_token_into_custom_attribute()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -329,38 +323,27 @@ class TokenAuthenticationTest extends TestCase
             'attribute' => 'token'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('token');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler('token'));
 
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertEquals(self::$token, $response->getBody());
+        $this->assertEquals(self::$token, (string) $response->getBody());
     }
 
     public function test_should_found_token_from_cookie()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withCookieParams([
                 'authorization' => self::$token
             ]);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -368,11 +351,12 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_found_token_from_custom_cookie()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withCookieParams([
                 'cookie-token' => self::$token
             ]);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -380,13 +364,7 @@ class TokenAuthenticationTest extends TestCase
             'cookie' => 'cookie-token'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -394,8 +372,12 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_found_token_from_query_string_parameter()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api?token_parameter=' . self::$token));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
+            ->withQueryParams([
+                'token_parameter' => self::$token
+            ]);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -403,13 +385,7 @@ class TokenAuthenticationTest extends TestCase
             'parameter' => 'token_parameter'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
         $this->assertEquals(self::$token, $response->getBody());
@@ -417,32 +393,28 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_attributes_setted_inside_authenticator()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $user_name = $request->getAttribute('user_from_inside_authenticator')['name'];
-            $response->getBody()->write($user_name);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseUsernameHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertEquals(self::$user['name'], $response->getBody());
+        $this->assertEquals(self::$user['name'], (string) $response->getBody());
     }
 
     public function test_should_return_401_without_error_method()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token_invalid);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -450,11 +422,7 @@ class TokenAuthenticationTest extends TestCase
             'error' => null
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertEmpty((string) $response->getBody());
@@ -462,22 +430,17 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_with_message()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token_invalid);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            $token = $request->getAttribute('authorization');
-            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseTokenHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertEquals(self::$wrong_token_message, json_decode((string) $response->getBody())->message);
@@ -485,9 +448,10 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_with_custom_error()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('https://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token_invalid);
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $error = function(ServerRequestInterface $request, ResponseInterface $response, UnauthorizedExceptionInterface $e){
 
@@ -495,8 +459,10 @@ class TokenAuthenticationTest extends TestCase
                 'custom_message' => $e->getMessage()
             ];
 
-            return $response->withJson($output);
-
+            $response->getBody()->write(json_encode($output));
+            return $response
+                ->withHeader('Content-Type', 'application/json')
+                ->withStatus(401);
         };
 
         $auth = new TokenAuthentication([
@@ -505,13 +471,7 @@ class TokenAuthenticationTest extends TestCase
             'error' => $error
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-//            $token = $request->getAttribute('authorization');
-//            $response->getBody()->write($token);
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertEquals(self::$wrong_token_message, json_decode((string) $response->getBody())->custom_message);
@@ -519,20 +479,17 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_401_when_not_using_https()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
         $this->assertRegExp('/Required HTTPS/', json_decode((string) $response->getBody())->message);
@@ -540,29 +497,27 @@ class TokenAuthenticationTest extends TestCase
 
     public function test_should_return_200_when_not_using_https_in_localhost()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://localhost/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('http')->withHost('localhost')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
     }
 
     public function test_should_return_200_when_not_using_https_with_relaxed()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -570,20 +525,17 @@ class TokenAuthenticationTest extends TestCase
             'relaxed' => ['example.com']
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
     }
 
     public function test_should_return_200_with_secure_disabled()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api'))
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals()
             ->withHeader('Authorization', 'Bearer ' . self::$token);
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -591,76 +543,64 @@ class TokenAuthenticationTest extends TestCase
             'secure' => false
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
     }
 
     public function test_should_return_401_when_match_path()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api/users'));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/api/users');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => ['/app', '/api', '/home']
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
     }
 
     public function test_should_return_401_when_match_path_with_trailing_slash()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api///'));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/api///');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
     }
 
     public function test_should_return_401_for_all_routes_when_path_empty()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api'));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
+        $uri = $request->getUri()->withScheme('https')->withHost('example.com')->withPath('/api');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => ''
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(401, $response->getStatusCode());
     }
 
     public function test_should_return_200_when_match_except()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/api/users/status'));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/api/users/status');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
@@ -668,30 +608,23 @@ class TokenAuthenticationTest extends TestCase
             'except' => ['/api/tasks', '/api/users/']
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
     }
 
     public function test_should_return_200_when_not_match_path()
     {
-        $request = Request::createFromEnvironment(Environment::mock())
-            ->withUri(Uri::createFromString('http://example.com/home'));
+        $request = (ServerRequestCreatorFactory::create())->createServerRequestFromGlobals();
+        $uri = $request->getUri()->withScheme('http')->withHost('example.com')->withPath('/home');
+        $request = $request->withUri($uri);
 
         $auth = new TokenAuthentication([
             'authenticator' => [$this, 'validAuthenticator'],
             'path' => '/api'
         ]);
 
-        $next = function (ServerRequestInterface $request, ResponseInterface $response) {
-            return $response;
-        };
-
-        $response = $auth($request, new Response(), $next);
+        $response = $auth->process($request, new ResponseInitHandler());
 
         $this->assertEquals(200, $response->getStatusCode());
     }
