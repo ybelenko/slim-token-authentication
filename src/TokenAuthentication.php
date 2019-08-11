@@ -18,10 +18,14 @@ use Dyorg\TokenAuthentication\TokenSearch;
 use InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
+use Slim\Routing\Route;
+use Slim\Routing\RouteContext;
+use Slim\Factory\AppFactory;
 use RuntimeException;
-use Slim\Route;
 
-class TokenAuthentication
+class TokenAuthentication implements MiddlewareInterface
 {
     private $options = [
         'secure' => true,
@@ -48,13 +52,13 @@ class TokenAuthentication
             throw new InvalidArgumentException('Authenticator option has not been setted.');
     }
 
-    public function __invoke(ServerRequestInterface $request, ResponseInterface $response, $next) : ResponseInterface
+    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler) : ResponseInterface
     {
         try {
 
             /** If rules say we should not authenticate call next and return. */
             if ($this->shouldAuthenticate($request) === false) {
-                return $next($request, $response);
+                return $handler->handle($request);
             }
 
             /** HTTP allowed only if secure is false or server is in relaxed array. */
@@ -70,11 +74,11 @@ class TokenAuthentication
             if ($authenticator_response === false)
                 throw new UnauthorizedException('Invalid authentication token.');
 
-            return $next($request, $response);
+            return $handler->handle($request);
 
         } catch (UnauthorizedExceptionInterface $e) {
 
-            return $this->errorHandler($request, $response, $e);
+            return $this->errorHandler($request, $e);
 
         }
     }
@@ -96,8 +100,16 @@ class TokenAuthentication
         $uri = $request->getUri()->getPath();
         $uri = '/' . trim($uri, '/');
 
+        $route  = null;
+        try {
+            $routeContext = RouteContext::fromRequest($request);
+            $route = $routeContext->getRoute();
+        } catch (RuntimeException $e) {
+            // that's normal
+        }
+
         /** If middleware applied directly to route or to group of routes we should authenticate */
-        if ($request->getAttribute('route') instanceof Route && $this->options["except"] === null && $this->options["path"] === null) {
+        if ($route instanceof Route && $this->options["except"] === null && $this->options["path"] === null) {
             return true;
         }
 
@@ -120,8 +132,9 @@ class TokenAuthentication
         return false;
     }
 
-    private function errorHandler(ServerRequestInterface $request, ResponseInterface $response, UnauthorizedExceptionInterface $e) : ResponseInterface
+    private function errorHandler(ServerRequestInterface $request, UnauthorizedExceptionInterface $e) : ResponseInterface
     {
+        $response  = (AppFactory::determineResponseFactory())->createResponse();
         if (isset($this->options['error'])) {
 
             $error_response = $this->options['error']($request, $response, $e);
@@ -145,7 +158,10 @@ class TokenAuthentication
             $output['token'] = $request->getAttribute($this->options['attribute']);
         }
 
-        return $response->withJson($output, 401, JSON_PRETTY_PRINT);
+        $response->getBody()->write(json_encode($output));
+        return $response
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus(401);
     }
 
     protected function setSecure(bool $secure) : void

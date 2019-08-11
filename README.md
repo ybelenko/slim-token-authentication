@@ -193,7 +193,10 @@ $error = function(ServerRequestInterface $request, ResponseInterface $response, 
         'success' => false
     ];
     
-    return $response->withJson($output, 401, JSON_PRETTY_PRINT);
+    $response->getBody()->write(json_encode($output));
+    return $response
+        ->withHeader('Content-Type', 'application/json')
+        ->withStatus(401);
     
 }
 

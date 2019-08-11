@@ -7,15 +7,13 @@ use Dyorg\TokenAuthentication;
 use Dyorg\TokenAuthentication\Example\App\AuthService;
 use Dyorg\TokenAuthentication\TokenSearch;
 use Psr\Http\Message\ServerRequestInterface;
-use Slim\App;
+use Slim\Factory\AppFactory;
 
-$config = [
-    'settings' => [
-        'displayErrorDetails' => true
-    ]
-];
+// Instantiate App
+$app = AppFactory::create();
 
-$app = new App($config);
+// Add error middleware
+$app->addErrorMiddleware(true, true, true);
 
 $authenticator = function(ServerRequestInterface &$request, TokenSearch $tokenSearch) {
 
@@ -61,7 +59,10 @@ $app->add(new TokenAuthentication([
  */
 $app->get('/', function($request, $response){
     $output = ['message' => 'It\'s a public area'];
-    return $response->withJson($output, 200, JSON_PRETTY_PRINT);
+    $response->getBody()->write(json_encode($output));
+    return $response
+        ->withHeader('Content-Type', 'application/json')
+        ->withStatus(200);
 });
 
 /**
@@ -70,7 +71,10 @@ $app->get('/', function($request, $response){
  */
 $app->get('/restrict', function($request, $response){
     $output = ['message' => 'It\'s a restrict area. Token authentication works!'];
-    return $response->withJson($output, 200, JSON_PRETTY_PRINT);
+    $response->getBody()->write(json_encode($output));
+    return $response
+        ->withHeader('Content-Type', 'application/json')
+        ->withStatus(200);
 });
 
 $app->run();
