@@ -1,6 +1,6 @@
 {
   "name": "dyorg/slim-token-authentication",
-  "description": "Slim 3.0+ Token Authentication Middleware",
+  "description": "Slim 4.0+ Token Authentication Middleware",
   "keywords": [
     "slim",
     "middleware",
